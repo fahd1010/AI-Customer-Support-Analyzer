@@ -1,4 +1,4 @@
-// src/App.tsx - MANUAL ANALYZE ONLY + IMAGE SUPPORT + NEW MESSAGE INDICATOR + SUPABASE SYNC + SHOPIFY CHAT
+// src/App.tsx - WITH PIPELINE & ADD DETAILS
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import Layout from "./components/Layout.tsx";
 import Dashboard from "./components/Dashboard.tsx";
@@ -10,7 +10,6 @@ import ProductInsights from "./components/ProductInsights.tsx";
 import LoginPage from "./components/LoginPage.tsx";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import Toast from "./components/Toast.tsx";
-import ShopifyChatInbox from "./components/ShopifyChatInbox.tsx";
 
 import {
   SupportTicket,
@@ -36,7 +35,12 @@ import {
   uploadAttachmentToStorage, 
   getInboxMessages, 
   getThreadMessages,
-  getAttachmentsByMessageId
+  getAttachmentsByMessageId,
+  updateThreadDetails,
+  getThreadDetails,
+  addThreadNote,
+  getThreadNotes,
+  addThreadAction
 } from "./services/supabaseInboxService.ts";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -85,6 +89,8 @@ type InboxItem = {
   hasAttachments: boolean;
   attachments: InboxAttachmentMeta[];
   customerKey?: string;
+  pipelineStage?: string;
+  priority?: string;
 };
 
 type ThreadResponse = {
@@ -93,6 +99,16 @@ type ThreadResponse = {
   count: number;
   messages: InboxItem[];
 };
+
+const PIPELINE_STAGES = [
+  { value: 'New Lead', label: '🟦 New Lead', color: 'bg-blue-100 text-blue-800 border-blue-300' },
+  { value: 'Contacted', label: '🟡 Contacted', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' },
+  { value: 'Qualified', label: '🟠 Qualified', color: 'bg-orange-100 text-orange-800 border-orange-300' },
+  { value: 'Proposal Sent', label: '🟣 Proposal Sent', color: 'bg-purple-100 text-purple-800 border-purple-300' },
+  { value: 'Negotiation', label: '🔵 Negotiation', color: 'bg-indigo-100 text-indigo-800 border-indigo-300' },
+  { value: 'Won', label: '🟢 Won', color: 'bg-green-100 text-green-800 border-green-300' },
+  { value: 'Lost', label: '🔴 Lost', color: 'bg-red-100 text-red-800 border-red-300' },
+];
 
 function jsonp<T = any>(url: string, timeoutMs = 15000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -165,7 +181,7 @@ async function fileToBase64(file: File): Promise<{ base64: string; name: string;
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
-    "dashboard" | "inbox" | "shopify_chat" | "add" | "list" | "customer_insights" | "agent_insights" | "products"
+    "dashboard" | "inbox" | "add" | "list" | "customer_insights" | "agent_insights" | "products"
   >("dashboard");
 
   const [authed, setAuthed] = useState<boolean>(() => {
@@ -461,8 +477,6 @@ const App: React.FC = () => {
         {activeTab === "agent_insights" && <AgentInsights tickets={tickets} />}
         {activeTab === "products" && <ProductInsights tickets={tickets} />}
 
-        {activeTab === "shopify_chat" && <ShopifyChatInbox showToast={showToast} />}
-
         {activeTab === "inbox" && (
           <InboxView
             tickets={tickets}
@@ -540,6 +554,19 @@ function InboxView(props: {
   const [sending, setSending] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
 
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [threadDetails, setThreadDetails] = useState<any>(null);
+  const [detailsForm, setDetailsForm] = useState({
+    customerName: "",
+    customerEmail: "",
+    phoneNumber: "",
+    orderNumber: "",
+    customLink: "",
+    productIssue: "",
+    pipelineStage: "New Lead",
+    priority: "Medium",
+  });
+
   const [attCache, setAttCache] = useState<Record<string, { kind: "image" | "file"; url: string; name: string }>>({});
 
   const [hiddenThreads, setHiddenThreads] = useState<Set<string>>(() => {
@@ -605,6 +632,8 @@ function InboxView(props: {
             hasAttachments: msg.has_attachments,
             attachments: [],
             customerKey: msg.customer_key,
+            pipelineStage: msg.pipeline_stage || "New Lead",
+            priority: msg.priority || "Medium",
           }));
           setInbox(converted);
           
@@ -908,6 +937,21 @@ function InboxView(props: {
           const msgs = await fetchThread(threadId);
           setThreadMessages(msgs);
         }
+
+        const details = await getThreadDetails(threadId);
+        setThreadDetails(details);
+        
+        const firstCustomer = supabaseMessages.find((m: any) => !m.is_from_me);
+        setDetailsForm({
+          customerName: firstCustomer?.from_name || "",
+          customerEmail: firstCustomer?.from_email || "",
+          phoneNumber: details?.phone_number || "",
+          orderNumber: details?.order_number || "",
+          customLink: details?.custom_link || "",
+          productIssue: details?.product_issue || "",
+          pipelineStage: details?.pipeline_stage || "New Lead",
+          priority: details?.priority || "Medium",
+        });
       } catch (e) {
         console.error(e);
         showToast("error", "Failed to load thread");
@@ -918,7 +962,6 @@ function InboxView(props: {
     },
     [fetchThread, showToast]
   );
-
   const selectedThreadMeta = useMemo(() => {
     const first = threadMessages.find((m) => !m.isFromMe) || threadMessages[0];
     return {
@@ -990,6 +1033,46 @@ function InboxView(props: {
     }
   };
 
+  const handleSaveDetails = async () => {
+    if (!selectedThreadId) return;
+    try {
+      await updateThreadDetails(selectedThreadId, {
+        phone_number: detailsForm.phoneNumber,
+        order_number: detailsForm.orderNumber,
+        custom_link: detailsForm.customLink,
+        product_issue: detailsForm.productIssue,
+        pipeline_stage: detailsForm.pipelineStage,
+        priority: detailsForm.priority,
+      });
+      
+      setInbox((prev) => prev.map((item) => 
+        item.threadId === selectedThreadId 
+          ? { ...item, pipelineStage: detailsForm.pipelineStage, priority: detailsForm.priority }
+          : item
+      ));
+      
+      showToast("success", "Details saved successfully!");
+      setShowDetailsModal(false);
+    } catch (err) {
+      console.error(err);
+      showToast("error", "Failed to save details");
+    }
+  };
+
+  const handlePipelineChange = async (stage: string) => {
+    if (!selectedThreadId) return;
+    try {
+      await updateThreadDetails(selectedThreadId, { pipeline_stage: stage });
+      setDetailsForm((prev) => ({ ...prev, pipelineStage: stage }));
+      setInbox((prev) => prev.map((item) => 
+        item.threadId === selectedThreadId ? { ...item, pipelineStage: stage } : item
+      ));
+      showToast("success", `Pipeline updated to ${stage}`);
+    } catch (err) {
+      showToast("error", "Failed to update pipeline");
+    }
+  };
+
   const displayInbox = useMemo(() => {
     const threadMap = new Map<string, InboxItem>();
     inbox.forEach((item) => {
@@ -1001,88 +1084,342 @@ function InboxView(props: {
     return Array.from(threadMap.values()).sort((a, b) => b.dateMs - a.dateMs);
   }, [inbox]);
 
+  const getPipelineColor = (stage: string) => {
+    const found = PIPELINE_STAGES.find((s) => s.value === stage);
+    return found?.color || "bg-gray-100 text-gray-800 border-gray-300";
+  };
+
   return (
     <div className="w-full h-full font-sans">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-indigo-50 to-white">
+      {!selectedThreadId ? (
+        <div className="space-y-3">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
               <div>
-                <div className="text-lg font-bold text-gray-900 flex items-center gap-2">📬 Gmail Inbox{loadingInbox && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>}</div>
-                <div className="text-xs text-gray-500 font-medium">{displayInbox.length} threads</div>
-              </div>
-              <button className="text-xs px-3 py-1.5 rounded-xl border border-indigo-200 bg-white hover:bg-indigo-50 font-semibold text-indigo-600 transition" onClick={() => { localStorage.removeItem(LS_LAST_SEEN_MS); localStorage.removeItem(LS_INBOX_ITEMS); setInbox([]); showToast("info", "Inbox reset"); }} title="Reset inbox">🔄 Reset</button>
-            </div>
-            <div className="max-h-[72vh] overflow-auto">
-              {displayInbox.length === 0 ? (<div className="p-8 text-center"><div className="text-4xl mb-3">📭</div><div className="text-sm text-gray-500 font-medium">No messages yet</div></div>) : (
-                <div className="divide-y divide-gray-100">
-                  {displayInbox.map((it) => {
-                    const isSelected = it.threadId === selectedThreadId;
-                    const isNew = !seenThreads.has(it.threadId);
-                    return (
-                      <div key={it.threadId} className={`p-4 hover:bg-indigo-50 cursor-pointer transition-all relative ${isSelected ? "bg-indigo-50 border-l-4 border-indigo-600" : ""} ${isNew ? "bg-blue-50" : ""}`} onClick={() => void openThread(it.threadId)}>
-                        {isNew && <div className="absolute top-2 right-2 w-2 h-2 bg-blue-600 rounded-full animate-pulse"></div>}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-bold text-gray-900 truncate flex items-center gap-2">{!it.isFromMe && <span className="text-blue-600">👤</span>}{it.fromName || it.fromEmail || "Unknown sender"}{isNew && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-600 text-white font-bold">NEW</span>}</div>
-                            <div className="text-xs text-gray-500 truncate">{it.fromEmail}</div>
-                          </div>
-                          <div className="text-[10px] text-gray-400 whitespace-nowrap">{new Date(it.dateMs).toLocaleDateString()}</div>
-                        </div>
-                        <div className="mt-2 text-sm font-semibold text-gray-800 truncate">{it.subject || "(no subject)"}</div>
-                        <div className="mt-1 text-xs text-gray-600 line-clamp-2 break-words leading-relaxed">{it.bodyText || ""}</div>
-                        <div className="mt-3 flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            {it.hasAttachments && <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 border text-gray-600 font-semibold">📎 {it.attachments?.length || 1}</span>}
-                            {!it.isFromMe && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-semibold">Inbound</span>}
-                          </div>
-                          <button className="text-[10px] px-2 py-1 rounded-lg border border-gray-200 hover:bg-white font-semibold text-gray-600 hover:text-red-600 transition" onClick={(e) => { e.stopPropagation(); hideThreadLocal(it.threadId); }} title="Hide thread">Hide</button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  📬 Gmail Inbox
+                  {loadingInbox && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>}
                 </div>
-              )}
+                <div className="text-xs text-gray-500 font-medium">{displayInbox.length} conversations</div>
+              </div>
+              <button
+                className="text-xs px-3 py-1.5 rounded-xl border border-indigo-200 bg-white hover:bg-indigo-50 font-semibold text-indigo-600 transition"
+                onClick={() => {
+                  localStorage.removeItem(LS_LAST_SEEN_MS);
+                  localStorage.removeItem(LS_INBOX_ITEMS);
+                  setInbox([]);
+                  showToast("info", "Inbox reset");
+                }}
+              >
+                🔄 Reset
+              </button>
             </div>
           </div>
+
+          {displayInbox.length === 0 ? (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-12 text-center">
+              <div className="text-6xl mb-4">📭</div>
+              <div className="text-sm text-gray-500 font-medium">No messages yet</div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {displayInbox.map((it) => {
+                const isNew = !seenThreads.has(it.threadId);
+                const pipelineColor = getPipelineColor(it.pipelineStage || "New Lead");
+                
+                return (
+                  <div
+                    key={it.threadId}
+                    className="bg-white rounded-2xl shadow-sm border-2 border-gray-200 p-4 hover:border-indigo-400 cursor-pointer transition-all relative"
+                    onClick={() => void openThread(it.threadId)}
+                  >
+                    {isNew && <div className="absolute top-3 right-3 w-3 h-3 bg-blue-600 rounded-full animate-pulse"></div>}
+                    
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={`text-xs px-3 py-1 rounded-full font-bold border-2 ${pipelineColor}`}>
+                            {PIPELINE_STAGES.find((s) => s.value === (it.pipelineStage || "New Lead"))?.label}
+                          </span>
+                          {isNew && <span className="text-xs px-2 py-1 rounded-full bg-blue-600 text-white font-bold">NEW</span>}
+                        </div>
+                        
+                        <div className="text-base font-bold text-gray-900 truncate mb-1">
+                          👤 {it.fromName || it.fromEmail || "Unknown sender"}
+                        </div>
+                        <div className="text-sm text-gray-600 truncate mb-2">{it.fromEmail}</div>
+                        <div className="text-sm font-semibold text-gray-800 truncate mb-2">{it.subject || "(no subject)"}</div>
+                        <div className="text-sm text-gray-600 line-clamp-2">{it.bodyText || ""}</div>
+                      </div>
+                      
+                      <div className="text-xs text-gray-400 whitespace-nowrap">
+                        {new Date(it.dateMs).toLocaleDateString()}
+                      </div>
+                    </div>
+                    
+                    <div className="mt-3 flex items-center gap-2">
+                      {it.hasAttachments && (
+                        <span className="text-xs px-2 py-1 rounded-full bg-gray-100 border text-gray-600 font-semibold">
+                          📎 {it.attachments?.length || 1}
+                        </span>
+                      )}
+                      {!it.isFromMe && (
+                        <span className="text-xs px-2 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-semibold">
+                          Inbound
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <div className="lg:col-span-2">
+      ) : (
+        <div className="grid grid-cols-1 gap-4">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-indigo-50 to-white">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="text-lg font-bold text-gray-900 truncate">{selectedThreadId ? "💬 Conversation" : "📧 Select a message"}</div>
-                  <div className="text-xs text-gray-500 break-words mt-1">{selectedThreadId ? (<><span className="font-semibold text-gray-700">{selectedThreadMeta.customerName || selectedThreadMeta.customerEmail || "Customer"}</span>{" • "}<span className="text-gray-600">{selectedThreadMeta.customerEmail || ""}</span>{" • "}<span className="text-gray-700 font-medium">{selectedThreadMeta.subject || "(no subject)"}</span></>) : ("Pick a thread from the inbox to view messages")}</div>
-                </div>
-                {selectedThreadId && (
-                  <button className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-purple-700 text-white text-sm font-bold hover:from-purple-700 hover:to-purple-800 disabled:opacity-50 shadow-md transition-all flex items-center gap-2" onClick={() => void analyzeThread()} disabled={analyzing || threadMessages.length === 0}>
-                    {analyzing ? (<><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>Analyzing...</>) : ("🔍 Analyze")}
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <button
+                  onClick={() => {
+                    setSelectedThreadId("");
+                    setThreadMessages([]);
+                  }}
+                  className="text-sm px-3 py-2 rounded-xl border-2 border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700 transition"
+                >
+                  ← Back
+                </button>
+                
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select
+                    value={detailsForm.pipelineStage}
+                    onChange={(e) => handlePipelineChange(e.target.value)}
+                    className={`text-xs px-3 py-2 rounded-xl border-2 font-bold transition ${getPipelineColor(detailsForm.pipelineStage)}`}
+                  >
+                    {PIPELINE_STAGES.map((stage) => (
+                      <option key={stage.value} value={stage.value}>
+                        {stage.label}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <button
+                    onClick={() => setShowDetailsModal(true)}
+                    className="text-xs px-3 py-2 rounded-xl border-2 border-green-200 bg-green-50 hover:bg-green-100 font-semibold text-green-700 transition"
+                  >
+                    📝 Add Details
                   </button>
-                )}
+                  
+                  <button
+                    onClick={() => void analyzeThread()}
+                    disabled={analyzing || threadMessages.length === 0}
+                    className="text-xs px-3 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-purple-700 text-white font-bold hover:from-purple-700 hover:to-purple-800 disabled:opacity-50 transition"
+                  >
+                    {analyzing ? "Analyzing..." : "🔍 Analyze"}
+                  </button>
+                </div>
+              </div>
+              
+              <div className="text-xs text-gray-600 mt-2">
+                <span className="font-semibold">{selectedThreadMeta.customerName || selectedThreadMeta.customerEmail}</span>
+                {" • "}
+                {selectedThreadMeta.subject || "(no subject)"}
               </div>
             </div>
-            <div className="max-h-[56vh] overflow-auto p-4 space-y-3 bg-gradient-to-b from-gray-50 to-white">
-              {!selectedThreadId ? (<div className="flex items-center justify-center h-full min-h-[300px]"><div className="text-center"><div className="text-6xl mb-4">👈</div><div className="text-sm text-gray-500 font-medium">Select a message from the inbox</div></div></div>) : threadLoading ? (<div className="flex items-center justify-center h-full min-h-[300px]"><div className="text-center"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div><div className="text-sm text-gray-500 font-medium mt-4">Loading thread...</div></div></div>) : threadMessages.length === 0 ? (<div className="flex items-center justify-center h-full min-h-[300px]"><div className="text-center"><div className="text-6xl mb-4">📭</div><div className="text-sm text-gray-500 font-medium">No messages in this thread</div></div></div>) : (threadMessages.map((m) => {
-                const isMe = m.isFromMe;
-                return (<div key={m.messageId} className={`flex ${isMe ? "justify-end" : "justify-start"}`}><div className={`max-w-[92%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-md border-2 transition-all hover:shadow-lg ${isMe ? "bg-gradient-to-br from-indigo-600 to-indigo-700 text-white border-indigo-600" : "bg-white text-gray-900 border-gray-200"}`}><div className="text-[11px] opacity-90 mb-2 flex items-center justify-between gap-2 font-semibold"><span className="truncate">{isMe ? "🧑💼 You" : `👤 ${m.fromName || m.fromEmail || "Customer"}`}</span><span className="whitespace-nowrap">{new Date(m.dateMs).toLocaleString()}</span></div><div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${isMe ? "text-white" : "text-gray-800"}`} dir="auto">{m.bodyText || ""}</div>{m.hasAttachments && Array.isArray(m.attachments) && m.attachments.length > 0 && (<div className="mt-3 space-y-2">{m.attachments.map((a) => { const cacheKey = `${m.messageId}:${a.index}`; const cached = attCache[cacheKey]; return (<div key={cacheKey} className="rounded-xl border-2 border-gray-300 bg-white p-2 shadow-sm"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-gray-800 truncate">📎 {a.name}</div><div className="text-[10px] text-gray-500 truncate">{a.contentType}</div></div><div className="flex items-center gap-2">{!cached ? (<button className="text-xs px-2 py-1 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 font-semibold text-indigo-700 transition" onClick={async () => { try { await fetchAttachment(m.threadId, m.messageId, a.index); showToast("success", "Attachment loaded"); } catch { showToast("error", "Failed to load attachment"); } }}>Load</button>) : cached.kind === "file" ? (<a className="text-xs px-2 py-1 rounded-lg border border-green-200 bg-green-50 hover:bg-green-100 font-semibold text-green-700 transition" href={cached.url} download={cached.name}>Download</a>) : null}</div></div>{cached?.kind === "image" && (<div className="mt-2"><img src={cached.url} alt={cached.name} className="max-h-64 w-auto rounded-xl border-2 border-gray-200 shadow-sm" /></div>)}</div>); })}</div>)}</div></div>);
-              }))}
+
+            <div className="max-h-[50vh] overflow-auto p-4 space-y-3 bg-gradient-to-b from-gray-50 to-white">
+              {threadLoading ? (
+                <div className="flex items-center justify-center h-full min-h-[200px]">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+                </div>
+              ) : threadMessages.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="text-4xl mb-2">📭</div>
+                  <div className="text-sm text-gray-500">No messages</div>
+                </div>
+              ) : (
+                threadMessages.map((m) => {
+                  const isMe = m.isFromMe;
+                  return (
+                    <div key={m.messageId} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-md border-2 ${
+                          isMe
+                            ? "bg-gradient-to-br from-indigo-600 to-indigo-700 text-white border-indigo-600"
+                            : "bg-white text-gray-900 border-gray-200"
+                        }`}
+                      >
+                        <div className="text-xs opacity-90 mb-2 font-semibold">
+                          {isMe ? "🧑💼 You" : `👤 ${m.fromName || m.fromEmail}`}
+                        </div>
+                        <div className={`text-sm whitespace-pre-wrap break-words ${isMe ? "text-white" : "text-gray-800"}`}>
+                          {m.bodyText || ""}
+                        </div>
+                        {m.hasAttachments && m.attachments.length > 0 && (
+                          <div className="mt-2 space-y-2">
+                            {m.attachments.map((a) => {
+                              const cacheKey = `${m.messageId}:${a.index}`;
+                              const cached = attCache[cacheKey];
+                              return (
+                                <div key={cacheKey} className="rounded-xl border-2 border-gray-300 bg-white p-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs font-bold text-gray-800 truncate">📎 {a.name}</div>
+                                    {!cached ? (
+                                      <button
+                                        className="text-xs px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 font-semibold text-indigo-700"
+                                        onClick={async () => {
+                                          try {
+                                            await fetchAttachment(m.threadId, m.messageId, a.index);
+                                          } catch {}
+                                        }}
+                                      >
+                                        Load
+                                      </button>
+                                    ) : cached.kind === "file" ? (
+                                      <a
+                                        href={cached.url}
+                                        download={cached.name}
+                                        className="text-xs px-2 py-1 rounded-lg bg-green-50 hover:bg-green-100 font-semibold text-green-700"
+                                      >
+                                        Download
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                  {cached?.kind === "image" && (
+                                    <img src={cached.url} alt={cached.name} className="mt-2 max-h-48 rounded-lg" />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
-            <div className="border-t-2 border-gray-200 p-4 bg-gradient-to-r from-gray-50 to-white">
+
+            <div className="border-t-2 border-gray-200 p-4 bg-white">
               <div className="flex flex-col gap-3">
-                <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} onKeyDown={onReplyKeyDown} disabled={!selectedThreadId || sending} placeholder={selectedThreadId ? "✍️ Type your reply... (Enter to send, Shift+Enter for new line)" : "Select a thread first to reply"} className="w-full min-h-[90px] rounded-2xl border-2 border-gray-200
- px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 resize-none break-words font-medium transition" />
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <label className="text-sm px-3 py-2 rounded-xl border-2 border-indigo-200 bg-indigo-50 hover:bg-indigo-100 cursor-pointer font-semibold text-indigo-700 transition">📎 Attach<input type="file" multiple className="hidden" disabled={!selectedThreadId || sending} onChange={(e) => { const files = e.target.files ? Array.from(e.target.files) : []; setReplyFiles(files); }} /></label>
-                    {replyFiles.length > 0 && (<div className="text-xs text-gray-700 break-words font-semibold bg-green-50 px-3 py-2 rounded-xl border border-green-200">✅ {replyFiles.length} file(s): {replyFiles.map((f) => f.name).join(", ")}</div>)}
-                  </div>
-                  <button className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 text-white text-sm font-bold hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all" disabled={!selectedThreadId || sending || (!replyText.trim() && replyFiles.length === 0)} onClick={() => void sendReply()}>{sending ? (<span className="flex items-center gap-2"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>Sending...</span>) : ("📤 Send Reply")}</button>
+                <textarea
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={onReplyKeyDown}
+                  disabled={sending}
+                  placeholder="✍️ Type your reply..."
+                  className="w-full min-h-[80px] rounded-xl border-2 border-gray-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+                />
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-sm px-3 py-2 rounded-xl border-2 border-indigo-200 bg-indigo-50 hover:bg-indigo-100 cursor-pointer font-semibold text-indigo-700">
+                    📎 Attach
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      disabled={sending}
+                      onChange={(e) => {
+                        const files = e.target.files ? Array.from(e.target.files) : [];
+                        setReplyFiles(files);
+                      }}
+                    />
+                  </label>
+                  {replyFiles.length > 0 && (
+                    <div className="text-xs text-gray-700 font-semibold">✅ {replyFiles.length} file(s)</div>
+                  )}
+                  <button
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 text-white text-sm font-bold hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50"
+                    disabled={sending || (!replyText.trim() && replyFiles.length === 0)}
+                    onClick={() => void sendReply()}
+                  >
+                    {sending ? "Sending..." : "📤 Send"}
+                  </button>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {showDetailsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-auto">
+            <div className="p-6 border-b border-gray-200">
+              <h3 className="text-xl font-bold text-gray-900">📝 Add Details</h3>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  value={detailsForm.customerName}
+                  disabled
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl bg-gray-50"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={detailsForm.customerEmail}
+                  disabled
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl bg-gray-50"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Phone Number</label>
+                <input
+                  type="text"
+                  value={detailsForm.phoneNumber}
+                  onChange={(e) => setDetailsForm((prev) => ({ ...prev, phoneNumber: e.target.value }))}
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Order Number</label>
+                <input
+                  type="text"
+                  value={detailsForm.orderNumber}
+                  onChange={(e) => setDetailsForm((prev) => ({ ...prev, orderNumber: e.target.value }))}
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Custom Link</label>
+                <input
+                  type="url"
+                  value={detailsForm.customLink}
+                  onChange={(e) => setDetailsForm((prev) => ({ ...prev, customLink: e.target.value }))}
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Product Issue</label>
+                <input
+                  type="text"
+                  value={detailsForm.productIssue}
+                  onChange={(e) => setDetailsForm((prev) => ({ ...prev, productIssue: e.target.value }))}
+                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button
+                onClick={() => setShowDetailsModal(false)}
+                className="flex-1 px-4 py-2 rounded-xl border-2 border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveDetails}
+                className="flex-1 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 text-white font-bold hover:from-indigo-700 hover:to-indigo-800"
+              >
+                💾 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

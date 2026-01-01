@@ -1,10 +1,9 @@
-// src/components/Layout.tsx - WITH SHOPIFY CHAT
+// src/components/Layout.tsx - CLEAN VERSION
 import React from "react";
 
 type Tab =
   | "dashboard"
   | "inbox"
-  | "shopify_chat"
   | "add"
   | "list"
   | "customer_insights"
@@ -21,8 +20,7 @@ export default function Layout(props: {
 
   const nav = [
     { id: "dashboard" as const, label: "Dashboard", icon: "📊" },
-    { id: "inbox" as const, label: "Gmail Inbox", icon: "📬" },
-    { id: "shopify_chat" as const, label: "Shopify Chat", icon: "🛒" },
+    { id: "inbox" as const, label: "Inbox", icon: "📬" },
     { id: "add" as const, label: "Add Ticket", icon: "➕" },
     { id: "list" as const, label: "Tickets", icon: "📋" },
     { id: "customer_insights" as const, label: "Customer Insights", icon: "👥" },
@@ -36,9 +34,8 @@ export default function Layout(props: {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-              AI Customer Support Analyzer
+              GD Customer Support Analyzer
             </h1>
-            <p className="text-sm text-gray-500 mt-1 font-medium">Gmail + Shopify + AI insights</p>
           </div>
 
           <button

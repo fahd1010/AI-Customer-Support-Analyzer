@@ -159,4 +159,104 @@ export async function getAttachmentsByMessageId(messageId: string): Promise<Inbo
 
   return data || [];
 }
+// src/services/supabaseInboxService.ts - ADD THESE FUNCTIONS AT THE END
+
+export async function updateThreadDetails(
+  threadId: string,
+  updates: {
+    pipeline_stage?: string;
+    priority?: string;
+    phone_number?: string;
+    order_number?: string;
+    order_date?: string;
+    order_status?: string;
+    product_issue?: string;
+    assigned_agent?: string;
+    tags?: string[];
+    custom_link?: string;
+  }
+): Promise<void> {
+  const { error } = await supabase
+    .from('inbox_messages')
+    .update({
+      ...updates,
+      tags: updates.tags ? JSON.stringify(updates.tags) : undefined,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('thread_id', threadId);
+
+  if (error) {
+    console.error('Failed to update thread details:', error);
+    throw error;
+  }
+}
+
+export async function getThreadDetails(threadId: string): Promise<any> {
+  const { data, error } = await supabase
+    .from('inbox_messages')
+    .select('pipeline_stage, priority, phone_number, order_number, order_date, order_status, product_issue, assigned_agent, tags, custom_link')
+    .eq('thread_id', threadId)
+    .single();
+
+  if (error) {
+    console.error('Failed to get thread details:', error);
+    return null;
+  }
+
+  return data;
+}
+
+export async function addThreadNote(
+  threadId: string,
+  agentName: string,
+  noteText: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('inbox_internal_notes')
+    .insert({
+      thread_id: threadId,
+      agent_name: agentName,
+      note_text: noteText,
+    });
+
+  if (error) {
+    console.error('Failed to add thread note:', error);
+    throw error;
+  }
+}
+
+export async function getThreadNotes(threadId: string): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('inbox_internal_notes')
+    .select('*')
+    .eq('thread_id', threadId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Failed to get thread notes:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+export async function addThreadAction(
+  threadId: string,
+  actionType: string,
+  actionNotes?: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('inbox_quick_actions')
+    .insert({
+      thread_id: threadId,
+      action_type: actionType,
+      action_notes: actionNotes,
+      action_status: 'Pending',
+    });
+
+  if (error) {
+    console.error('Failed to add thread action:', error);
+    throw error;
+  }
+}
 
