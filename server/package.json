@@ -1,0 +1,13 @@
+{
+  "name": "kommo-webhook-receiver",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}

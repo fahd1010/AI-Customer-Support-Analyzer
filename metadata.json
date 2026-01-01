@@ -1,0 +1,5 @@
+{
+  "name": "AI Customer Support Analyzer",
+  "description": "A comprehensive dashboard for tracking customer issues, analyzing them with Gemini AI for categories, sentiment, and themes, and monitoring resolution progress.",
+  "requestFramePermissions": []
+}
